@@ -787,6 +787,11 @@ BOOL _fileIsSymbolicLink(const unz_file_info *fileInfo);
 - (BOOL)writeFileAtPath:(NSString *)path withFileName:(nullable NSString *)fileName compressionLevel:(int)compressionLevel password:(nullable NSString *)password AES:(BOOL)aes
 {
     NSAssert((_zip != NULL), @"Attempting to write to an archive which was never opened");
+
+    NSString *resolvedPath = [path stringByResolvingSymlinksInPath];
+    if (![resolvedPath isEqualToString:path]) {
+        return NO;
+    }
     
     FILE *input = fopen(path.fileSystemRepresentation, "r");
     if (NULL == input) {

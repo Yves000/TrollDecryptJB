@@ -32,6 +32,31 @@ static BOOL waitForContentOfFileSync(NSString *filePath, NSString *content, NSTi
     return (rc == 0);
 }
 
+
+static NSString *lldbQuotedProcessName(const char *executableName) {
+    if (!executableName) {
+        return nil;
+    }
+    NSString *name = [NSString stringWithUTF8String:executableName];
+    if (!name) {
+        return nil;
+    }
+
+    NSCharacterSet *controlSet = [NSCharacterSet controlCharacterSet];
+    NSMutableString *sanitized = [NSMutableString stringWithCapacity:name.length];
+    for (NSUInteger i = 0; i < name.length; i++) {
+        unichar c = [name characterAtIndex:i];
+        if ([controlSet characterIsMember:c]) {
+            continue;
+        }
+        [sanitized appendFormat:@"%C", c];
+    }
+
+    NSString *escaped = [[sanitized stringByReplacingOccurrencesOfString:@"\" withString:@"\\"]
+                         stringByReplacingOccurrencesOfString:@""" withString:@"\""];
+    return [NSString stringWithFormat:@""%@"", escaped];
+}
+
 UIWindow *alertWindow = NULL;
 UIWindow *kw = NULL;
 UIViewController *root = NULL;
@@ -208,10 +233,15 @@ void decryptApp(NSDictionary *app) {
 
 pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
     NSLog(@"[trolldecrypt] Attaching lldb to executable: %s (PID: %d)", executableName, target_pid);
-
     NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_attach.txt"];
+    NSString *quotedName = lldbQuotedProcessName(executableName);
+    if (!quotedName) {
+        NSLog(@"[trolldecrypt] Invalid executable name for lldb attach");
+        return 0;
+    }
     NSString *scriptContent = [NSString stringWithFormat:
-        @"process attach --name '%s' --waitfor\n", executableName]; // TODO: shell-escape executableName
+        @"process attach --name %@ --waitfor
+", quotedName];
     [scriptContent writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSString *logPath = getLogPath();
 
