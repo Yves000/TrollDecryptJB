@@ -1,13 +1,13 @@
 TARGET := iphone:clang:latest:15.0
 INSTALL_TARGET_PROCESSES = SpringBoard appstored installd TrollDecrypt
 ARCHS = arm64 arm64e
-THEOS_DEVICE_IP = 192.168.1.160
+THEOS_DEVICE_IP = 192.168.1.82
 
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = TrollDecrypt
 TWEAK_NAME = TrollDecryptHook
-TOOL_NAME = TDDaemonKiller
+TOOL_NAME = TDDaemonKiller trolldecryptjb
 
 # Application files
 TrollDecrypt_FILES = SSZipArchive/minizip/unzip.c SSZipArchive/minizip/crypt.c SSZipArchive/minizip/ioapi_buf.c SSZipArchive/minizip/ioapi_mem.c SSZipArchive/minizip/ioapi.c SSZipArchive/minizip/minishared.c SSZipArchive/minizip/zip.c SSZipArchive/minizip/aes/aes_ni.c SSZipArchive/minizip/aes/aescrypt.c SSZipArchive/minizip/aes/aeskey.c SSZipArchive/minizip/aes/aestab.c SSZipArchive/minizip/aes/fileenc.c SSZipArchive/minizip/aes/hmac.c SSZipArchive/minizip/aes/prng.c SSZipArchive/minizip/aes/pwd2key.c SSZipArchive/minizip/aes/sha1.c SSZipArchive/SSZipArchive.m
@@ -28,6 +28,15 @@ TDDaemonKiller_INSTALL_NAME = appstoretrollerKiller
 TDDaemonKiller_CFLAGS = -fobjc-arc
 TDDaemonKiller_CODESIGN_FLAGS = -SappstoretrollerKiller/entitlements.plist
 TDDaemonKiller_INSTALL_PATH = /usr/local/bin
+
+# CLI tool for decrypting apps from command line
+trolldecryptjb_FILES = cli_main.m TDDumpDecrypted.m TDUtils.m LSApplicationProxy+AltList.m appstoretrollerKiller/TSUtil.m
+trolldecryptjb_FILES += SSZipArchive/minizip/unzip.c SSZipArchive/minizip/crypt.c SSZipArchive/minizip/ioapi_buf.c SSZipArchive/minizip/ioapi_mem.c SSZipArchive/minizip/ioapi.c SSZipArchive/minizip/minishared.c SSZipArchive/minizip/zip.c SSZipArchive/minizip/aes/aes_ni.c SSZipArchive/minizip/aes/aescrypt.c SSZipArchive/minizip/aes/aeskey.c SSZipArchive/minizip/aes/aestab.c SSZipArchive/minizip/aes/fileenc.c SSZipArchive/minizip/aes/hmac.c SSZipArchive/minizip/aes/prng.c SSZipArchive/minizip/aes/pwd2key.c SSZipArchive/minizip/aes/sha1.c SSZipArchive/SSZipArchive.m
+trolldecryptjb_FRAMEWORKS = Foundation MobileCoreServices
+trolldecryptjb_CFLAGS = -fobjc-arc
+trolldecryptjb_CODESIGN_FLAGS = -Sentitlements.plist
+trolldecryptjb_INSTALL_PATH = /usr/local/bin
+trolldecryptjb_BUNDLE_RESOURCES = flexdecrypt_bin dlopentool
 
 # dlopen tool - compile and bundle with app
 DLOPEN_TOOL_NAME = dlopentool
