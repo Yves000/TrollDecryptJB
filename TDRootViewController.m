@@ -217,7 +217,7 @@
         NSString *stdOut = nil;
         NSString *stdErr = nil;
         int result = spawnRoot(killerPath, @[], &stdOut, &stdErr);
-        
+        (void)result;
         NSLog(@"[TrollDecrypt] appstoretrollerKiller result: %d", result);
         if (stdOut && stdOut.length > 0) {
             NSLog(@"[TrollDecrypt] stdout: %@", stdOut);
@@ -306,11 +306,15 @@
 
         alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:[NSString stringWithFormat:@"Decrypt %@?", app[@"name"]] preferredStyle:UIAlertControllerStyleAlert];
         UIAlertAction *cancel = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
-        UIAlertAction *decrypt = [UIAlertAction actionWithTitle:@"Yes" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIAlertAction *decrypt = [UIAlertAction actionWithTitle:@"Yes (lldb)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             decryptApp(app);
+        }];
+        UIAlertAction *decryptFast = [UIAlertAction actionWithTitle:@"Yes (fast)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            decryptAppFast(app);
         }];
 
         [alert addAction:decrypt];
+        [alert addAction:decryptFast];
         [alert addAction:cancel];
     } else {
         alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:@"Enter PID to decrypt" preferredStyle:UIAlertControllerStyleAlert];

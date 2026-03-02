@@ -47,6 +47,8 @@
 #include <mach/task_info.h>
 #include <sys/mman.h>
 #include <mach/machine.h>
+#include <spawn.h>
+#include <sys/wait.h>
 
 #include "TDDumpDecrypted.h"
 #import "TDUtils.h"
@@ -211,7 +213,7 @@ int find_off_cryptid(const char *filePath) {
     for (uint32_t i = 0; i < header->ncmds; i++) {
         if (lc->cmd == LC_ENCRYPTION_INFO || lc->cmd == LC_ENCRYPTION_INFO_64) {
             struct encryption_info_command *encryption_info = (struct encryption_info_command*) lc;
-
+            (void)encryption_info;
 
             NSLog(@"[trolldecrypt] cryptid: %d\n", encryption_info->cryptid);
             NSLog(@"[trolldecrypt] Found cryptid at offset: 0x%llx\n", (mach_vm_address_t)lc + offsetof(struct encryption_info_command, cryptid) - (mach_vm_address_t)header);
@@ -591,14 +593,15 @@ int find_off_cryptid(const char *filePath) {
 	NSLog(@"[trolldecrypt] ZIP dir: %@", zipDir);
 	unlink([IPAFile UTF8String]);
 	@try {
-		BOOL success = [SSZipArchive createZipFileAtPath:IPAFile 
+		BOOL success = [SSZipArchive createZipFileAtPath:IPAFile
 										withContentsOfDirectory:zipDir
-										keepParentDirectory:NO 
+										keepParentDirectory:NO
 										compressionLevel:1
 										password:nil
 										AES:NO
 										progressHandler:nil
 		];
+		(void)success;
 		NSLog(@"[trolldecrypt] ========  ZIP operation complete: %s ========", (success)?"success":"failed");
 	}
 	@catch(NSException *e) {
@@ -611,6 +614,203 @@ int find_off_cryptid(const char *filePath) {
 
 	NSLog(@"[trolldecrypt] ======== Wrote %@ ========", [self IPAPath]);
 	return;
+}
+
+// MARK: - LLDB-based decryption (bypasses task_for_pid)
+// Uses the existing lldb's stdin pipe to send Python commands for memory reading
+
+-(void) createIPAFileViaLLDB:(pid_t)pid lldbPID:(pid_t)lldb_pid {
+    NSString *IPAFile = [self IPAPath];
+    NSString *appDir  = [self appPath];
+    NSString *appCopyDir = [NSString stringWithFormat:@"%@/ipa/Payload/%s", [self docPath], self->appDirName];
+    NSString *zipDir = [NSString stringWithFormat:@"%@/ipa", [self docPath]];
+    NSFileManager *fm = [[NSFileManager alloc] init];
+
+    [fm removeItemAtPath:IPAFile error:nil];
+    [fm removeItemAtPath:appCopyDir error:nil];
+    [fm createDirectoryAtPath:appCopyDir withIntermediateDirectories:true attributes:nil error:nil];
+    [fm setDelegate:(id<NSFileManagerDelegate>)self];
+
+    NSLog(@"[trolldecrypt] ======== LLDB DECRYPTION: START FILE COPY ========");
+    NSLog(@"[trolldecrypt] IPAFile: %@", IPAFile);
+    NSLog(@"[trolldecrypt] appDir: %@", appDir);
+    NSLog(@"[trolldecrypt] appCopyDir: %@", appCopyDir);
+
+    NSError *err;
+    [fm copyItemAtPath:appDir toPath:appCopyDir error:&err];
+    NSLog(@"[trolldecrypt] ======== END OF FILE COPY ========");
+
+    int lldb_fd = getLLDBStdinFd();
+    if (lldb_fd < 0) {
+        NSLog(@"[trolldecrypt] LLDB: No stdin pipe available!");
+        return;
+    }
+
+    NSString *logPath = getLogPath(); // lldb's stdout log
+
+    NSLog(@"[trolldecrypt] LLDB decryption: scanning for encrypted binaries...");
+
+    // Scan the copied app for encrypted Mach-O binaries
+    NSArray *allFiles = [fm subpathsOfDirectoryAtPath:appCopyDir error:nil];
+    for (NSString *relativePath in allFiles) {
+        NSString *fullPath = [appCopyDir stringByAppendingPathComponent:relativePath];
+
+        FILE *f = fopen([fullPath UTF8String], "rb");
+        if (!f) continue;
+
+        struct mach_header_64 mh;
+        if (fread(&mh, sizeof(mh), 1, f) != 1 || (mh.magic != MH_MAGIC_64 && mh.magic != MH_MAGIC)) {
+            fclose(f);
+            continue;
+        }
+
+        uint32_t header_size = (mh.magic == MH_MAGIC_64) ? sizeof(struct mach_header_64) : sizeof(struct mach_header);
+        fseek(f, header_size, SEEK_SET);
+
+        uint32_t cryptoff = 0, cryptsize = 0, cryptid = 0;
+        long cryptid_file_offset = 0;
+
+        for (uint32_t i = 0; i < mh.ncmds; i++) {
+            struct load_command lc;
+            long cmd_offset = ftell(f);
+            if (fread(&lc, sizeof(lc), 1, f) != 1) break;
+            if (lc.cmd == LC_ENCRYPTION_INFO_64 || lc.cmd == LC_ENCRYPTION_INFO) {
+                struct encryption_info_command eic;
+                fseek(f, cmd_offset, SEEK_SET);
+                if (fread(&eic, sizeof(eic), 1, f) == 1) {
+                    cryptoff = eic.cryptoff;
+                    cryptsize = eic.cryptsize;
+                    cryptid = eic.cryptid;
+                    cryptid_file_offset = cmd_offset + offsetof(struct encryption_info_command, cryptid);
+                }
+                break;
+            }
+            fseek(f, cmd_offset + lc.cmdsize, SEEK_SET);
+        }
+        fclose(f);
+
+        if (cryptid == 0) continue;
+
+        NSLog(@"[trolldecrypt] LLDB: Found encrypted binary: %@ (cryptoff=%u, cryptsize=%u)", relativePath, cryptoff, cryptsize);
+
+        NSString *dumpFile = [NSTemporaryDirectory() stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"lldb_dump_%@.bin", [relativePath lastPathComponent]]];
+        // Remove old dump file
+        [[NSFileManager defaultManager] removeItemAtPath:dumpFile error:nil];
+
+        // Send Python script to the EXISTING lldb via stdin pipe
+        // The script finds the module, reads memory, and writes to a file
+        NSString *pyCmd = [NSString stringWithFormat:
+            @"script\n"
+            @"import lldb\n"
+            @"target = lldb.debugger.GetSelectedTarget()\n"
+            @"process = target.GetProcess()\n"
+            @"found = False\n"
+            @"for i in range(target.GetNumModules()):\n"
+            @"    mod = target.GetModuleAtIndex(i)\n"
+            @"    fspec = mod.GetFileSpec()\n"
+            @"    path = str(fspec)\n"
+            @"    if '%@' in path:\n"
+            @"        base = mod.GetObjectFileHeaderAddress().GetLoadAddress(target)\n"
+            @"        addr = base + %u\n"
+            @"        print('LLDB_BASE:' + hex(base))\n"
+            @"        print('LLDB_DUMP_ADDR:' + hex(addr))\n"
+            @"        err = lldb.SBError()\n"
+            @"        data = process.ReadMemory(addr, %u, err)\n"
+            @"        if err.Success() and data:\n"
+            @"            with open('%@', 'wb') as f:\n"
+            @"                f.write(data)\n"
+            @"            print('LLDB_DUMP_OK:' + str(len(data)))\n"
+            @"            found = True\n"
+            @"        else:\n"
+            @"            print('LLDB_DUMP_FAIL:' + str(err))\n"
+            @"        break\n"
+            @"if not found:\n"
+            @"    print('LLDB_NOT_FOUND')\n"
+            @"DONE\n",
+            [relativePath lastPathComponent], cryptoff, cryptsize, dumpFile];
+
+        NSLog(@"[trolldecrypt] LLDB: Sending memory dump command for %@...", [relativePath lastPathComponent]);
+        const char *cmdBytes = [pyCmd UTF8String];
+        write(lldb_fd, cmdBytes, strlen(cmdBytes));
+
+        // Wait for result in lldb's output log
+        BOOL dumpSuccess = NO;
+        for (int attempt = 0; attempt < 120; attempt++) { // 60 second timeout
+            usleep(500000);
+            NSString *output = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
+            if ([output containsString:@"LLDB_DUMP_OK"]) {
+                NSLog(@"[trolldecrypt] LLDB: Memory dump successful for %@!", [relativePath lastPathComponent]);
+                dumpSuccess = YES;
+                break;
+            } else if ([output containsString:@"LLDB_DUMP_FAIL"]) {
+                NSLog(@"[trolldecrypt] LLDB: Memory dump FAILED for %@", [relativePath lastPathComponent]);
+                break;
+            } else if ([output containsString:@"LLDB_NOT_FOUND"]) {
+                NSLog(@"[trolldecrypt] LLDB: Module not found for %@", [relativePath lastPathComponent]);
+                break;
+            }
+        }
+
+        if (!dumpSuccess) {
+            NSLog(@"[trolldecrypt] LLDB: Skipping %@", relativePath);
+            continue;
+        }
+
+        // Read dumped data and patch the copied binary
+        NSData *decryptedData = [NSData dataWithContentsOfFile:dumpFile];
+        if (!decryptedData || decryptedData.length != cryptsize) {
+            NSLog(@"[trolldecrypt] LLDB: Dump size mismatch for %@: got %lu, expected %u",
+                  relativePath, (unsigned long)decryptedData.length, cryptsize);
+            continue;
+        }
+
+        NSLog(@"[trolldecrypt] LLDB: Patching %@ with %u bytes of decrypted data...", relativePath, cryptsize);
+        int outfd = open([fullPath UTF8String], O_RDWR);
+        if (outfd == -1) {
+            NSLog(@"[trolldecrypt] LLDB: Failed to open %@ for writing", fullPath);
+            continue;
+        }
+
+        lseek(outfd, cryptoff, SEEK_SET);
+        write(outfd, [decryptedData bytes], cryptsize);
+
+        if (cryptid_file_offset > 0) {
+            uint32_t zero = 0;
+            lseek(outfd, cryptid_file_offset, SEEK_SET);
+            write(outfd, &zero, sizeof(zero));
+            NSLog(@"[trolldecrypt] LLDB: Set cryptid=0 at offset 0x%lx", cryptid_file_offset);
+        }
+
+        close(outfd);
+        NSLog(@"[trolldecrypt] LLDB: Successfully decrypted %@!", relativePath);
+        [[NSFileManager defaultManager] removeItemAtPath:dumpFile error:nil];
+
+        // Clear the log markers for the next binary
+        // (Truncate log so next iteration doesn't see old markers)
+        [@"" writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+
+    // ZIP
+    NSLog(@"[trolldecrypt] ======== STARTING ZIP ========");
+    unlink([IPAFile UTF8String]);
+    @try {
+        BOOL success = [SSZipArchive createZipFileAtPath:IPAFile
+                                withContentsOfDirectory:zipDir
+                                keepParentDirectory:NO
+                                compressionLevel:1
+                                password:nil
+                                AES:NO
+                                progressHandler:nil];
+        (void)success;
+        NSLog(@"[trolldecrypt] ======== ZIP complete: %s ========", success ? "success" : "failed");
+    }
+    @catch(NSException *e) {
+        NSLog(@"[trolldecrypt] ZIP error: %@", e);
+    }
+
+    [fm removeItemAtPath:zipDir error:nil];
+    NSLog(@"[trolldecrypt] ======== Wrote %@ ========", [self IPAPath]);
 }
 
 @end

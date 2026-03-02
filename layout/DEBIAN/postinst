@@ -1,0 +1,26 @@
+#!/bin/sh
+
+PLIST="/var/jb/var/mobile/Library/Preferences/com.trolldecrypt.hook.plist"
+
+# Create hook preferences if they don't exist
+if [ ! -f "$PLIST" ]; then
+    cat > "$PLIST" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>hookEnabled</key>
+    <true/>
+    <key>iOSVersion</key>
+    <string>99.0.0</string>
+</dict>
+</plist>
+EOF
+    chmod 644 "$PLIST"
+    chown mobile:mobile "$PLIST"
+fi
+
+# Restart hooked daemons to pick up the tweak
+killall -9 appstored installd 2>/dev/null || true
+
+exit 0
