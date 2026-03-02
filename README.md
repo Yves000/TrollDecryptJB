@@ -15,6 +15,9 @@
 # visionOS Support
 ##### TrollDecryptJB can decrypt visionOS apps on a jailbroken iPhone — no Vision Pro jailbreak needed. Enable "visionOS Support" in the about menu to allow installation and decryption of visionOS apps.
 
+**Requirements:**
+- Dopamine jailbreak (uses `jbctl trustcache add` which is not available on palera1n)
+
 **Current limitations:**
 - Only third-party visionOS-exclusive apps from the App Store are supported
 - Apple's own visionOS apps do not work
