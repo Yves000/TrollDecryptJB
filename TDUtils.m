@@ -229,8 +229,7 @@ void decryptAppFast(NSDictionary *app) {
         // Inject CDHashes into trustcache before launching
         NSString *appDir = [executable stringByDeletingLastPathComponent];
         NSLog(@"[trolldecrypt] [fast] Injecting trustcache for: %@", appDir);
-        NSUInteger injected = TDInjectTrustcacheForApp(appDir);
-        NSLog(@"[trolldecrypt] [fast] Trustcache: injected %lu hashes", (unsigned long)injected);
+        TDInjectTrustcacheForApp(appDir);
 
         usleep(10000);
         NSLog(@"[trolldecrypt] [fast] launching app...");
@@ -298,8 +297,7 @@ void decryptAppFast(NSDictionary *app) {
         BOOL attached = waitForContentOfFileSync(logPath, @"Architecture set to", 10.0);
         if (!attached) {
             NSLog(@"[trolldecrypt] [fast] lldb failed to attach within timeout");
-            NSString *logContent = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
-            NSLog(@"[trolldecrypt] [fast] lldb log: %@", logContent);
+            NSLog(@"[trolldecrypt] [fast] lldb log: %@", [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil]);
             kill(lldb_pid, SIGKILL);
             kill(foundPid, SIGKILL);
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -357,8 +355,7 @@ void decryptApp(NSDictionary *app) {
         // (needed for visionOS apps whose signatures aren't trusted by iOS AMFI)
         NSString *appDir = [executable stringByDeletingLastPathComponent];
         NSLog(@"[trolldecrypt] Injecting trustcache for: %@", appDir);
-        NSUInteger injected = TDInjectTrustcacheForApp(appDir);
-        NSLog(@"[trolldecrypt] Trustcache: injected %lu hashes", (unsigned long)injected);
+        TDInjectTrustcacheForApp(appDir);
 
         NSLog(@"[trolldecrypt] lldb --waitfor for '%@'...", binaryName);
         pid_t lldb_pid = attachLLDBToProcessByName([binaryName UTF8String], -1);//-1 for unknown
