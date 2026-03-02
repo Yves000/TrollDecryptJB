@@ -12,6 +12,14 @@
 # So how it's going?
 ##### Thanks to 82flex, it seems to be working on iOS 15-16 based on lldb.
 
+# visionOS Support
+##### TrollDecryptJB can decrypt visionOS apps on a jailbroken iPhone — no Vision Pro jailbreak needed. Enable "visionOS Support" in the about menu to allow installation and decryption of visionOS apps.
+
+**Current limitations:**
+- Only third-party visionOS-exclusive apps from the App Store are supported
+- Apple's own visionOS apps do not work
+- Universal apps that also have an iPhone version in the App Store are currently not supported
+
 # Credits
 - [fiore](https://github.com/donato-fiore) for [TrollDecrpyt](https://github.com/donato-fiore/TrollDecrypt)
 - [Mineek](https://github.com/mineek) and [Nathan](https://github.com/verygenericname) for [appstoretroller](https://github.com/verygenericname/appstoretroller)

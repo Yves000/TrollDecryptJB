@@ -11,11 +11,15 @@
     [super loadView];
 
     self.apps = appList();
+    self.iconCache = [NSMutableDictionary new];
     self.title = @"TrollDecrypt";
 	self.navigationController.navigationBar.prefersLargeTitles = YES;
-    
+
     // Initialize hook preferences
     self.hookPrefs = [[NSUserDefaults alloc] initWithSuiteName:@"com.trolldecrypt.hook"];
+
+    // Prefetch visionOS icons in parallel
+    [self fetchVisionOSIcons];
     
     // Right button - info
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"info.circle"] style:UIBarButtonItemStylePlain target:self action:@selector(about:)];
@@ -26,6 +30,106 @@
     UIRefreshControl *refreshControl = [[UIRefreshControl alloc] init];
     [refreshControl addTarget:self action:@selector(refreshApps:) forControlEvents:UIControlEventValueChanged];
     self.refreshControl = refreshControl;
+}
+
+- (UIImage *)roundedIconFromImage:(UIImage *)image size:(CGFloat)size {
+    CGSize iconSize = CGSizeMake(size, size);
+    UIGraphicsBeginImageContextWithOptions(iconSize, NO, [UIScreen mainScreen].scale);
+    CGFloat radius = size * 0.2237; // iOS superellipse approximation
+    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size) cornerRadius:radius];
+    [path addClip];
+    [image drawInRect:CGRectMake(0, 0, size, size)];
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return result;
+}
+
+- (UIImage *)placeholderIcon {
+    CGFloat size = 60;
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, [UIScreen mainScreen].scale);
+    CGFloat radius = size * 0.2237;
+    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0.5, 0.5, size - 1, size - 1) cornerRadius:radius];
+    [[UIColor systemGrayColor] setStroke];
+    path.lineWidth = 1.0;
+    [path stroke];
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return result;
+}
+
+- (void)fetchVisionOSIcons {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Collect all visionOS apps with itemIds
+        NSMutableArray *itemIds = [NSMutableArray new];
+        NSMutableDictionary *idToBundleID = [NSMutableDictionary new];
+        for (NSDictionary *app in self.apps) {
+            if ([app[@"isVisionOS"] boolValue] && app[@"itemId"]) {
+                NSString *bundleID = app[@"bundleID"];
+                NSNumber *itemId = app[@"itemId"];
+                // Check disk cache first
+                NSString *cachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"icon_%@.png", bundleID]];
+                NSData *cachedData = [NSData dataWithContentsOfFile:cachePath];
+                if (cachedData) {
+                    UIImage *cached = [UIImage imageWithData:cachedData];
+                    if (cached) {
+                        UIImage *rounded = [self roundedIconFromImage:cached size:60];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            self.iconCache[bundleID] = rounded;
+                        });
+                        continue;
+                    }
+                }
+                [itemIds addObject:[itemId stringValue]];
+                idToBundleID[[itemId stringValue]] = bundleID;
+            }
+        }
+        if (itemIds.count == 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self.tableView reloadData];
+            });
+            return;
+        }
+
+        // Single batch lookup for all visionOS apps
+        NSString *ids = [itemIds componentsJoinedByString:@","];
+        NSURL *lookupURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://itunes.apple.com/lookup?id=%@", ids]];
+        NSData *jsonData = [NSData dataWithContentsOfURL:lookupURL];
+        if (!jsonData) return;
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+        NSArray *results = json[@"results"];
+        if (!results) return;
+
+        dispatch_group_t group = dispatch_group_create();
+        for (NSDictionary *result in results) {
+            NSString *artworkURL = result[@"artworkUrl512"];
+            if (!artworkURL) artworkURL = result[@"artworkUrl100"];
+            NSNumber *trackId = result[@"trackId"];
+            if (!artworkURL || !trackId) continue;
+            NSString *bundleID = idToBundleID[[trackId stringValue]];
+            if (!bundleID) continue;
+
+            dispatch_group_enter(group);
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                NSData *imgData = [NSData dataWithContentsOfURL:[NSURL URLWithString:artworkURL]];
+                if (imgData) {
+                    UIImage *fetchedIcon = [UIImage imageWithData:imgData];
+                    if (fetchedIcon) {
+                        NSString *cachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"icon_%@.png", bundleID]];
+                        [imgData writeToFile:cachePath atomically:YES];
+                        UIImage *rounded = [self roundedIconFromImage:fetchedIcon size:60];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            self.iconCache[bundleID] = rounded;
+                        });
+                    }
+                }
+                dispatch_group_leave(group);
+            });
+        }
+        dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.tableView reloadData];
+        });
+    });
 }
 
 - (void)viewDidAppear:(bool)animated {
@@ -60,53 +164,70 @@
 - (void)about:(id)sender {
     BOOL hookEnabled = [self.hookPrefs boolForKey:@"hookEnabled"];
     BOOL updatesEnabled = [self.hookPrefs boolForKey:@"updatesEnabled"];
+    BOOL visionOSEnabled = [self.hookPrefs boolForKey:@"visionOSEnabled"];
     NSString *iosVersion = [self.hookPrefs objectForKey:@"iOSVersion"];
     if (iosVersion == nil || [iosVersion length] == 0) {
         iosVersion = @"99.0.0";
     }
-    
+
     NSString *hookStatus = hookEnabled ? @"Enabled" : @"Disabled";
     NSString *updatesStatus = updatesEnabled ? @"Enabled" : @"Disabled (buyProduct only)";
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"TrollDecrypt JB" 
-        message:[NSString stringWithFormat:@"Original by fiore\nModified by 34306 and khanhduytran0\nIcon by @super.user\nbfdecrypt by @bishopfox\ndumpdecrypted by @i0n1c\nUpdated for TrollStore by @wh1te4ever\nNathan and mineek for appstoretroller\n\n\nAppStore Spoof: %@\nSpoof iOS Version: %@\nShow Update (in AppStore): %@\n\nThis modified version support decrypt higher requirement iOS application.\nThanks to khanhduytran0, appstoretroller, lldb, modified by 34306.", hookStatus, iosVersion, updatesStatus]
+    NSString *visionOSStatus = visionOSEnabled ? @"Enabled" : @"Disabled";
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"TrollDecrypt JB"
+        message:[NSString stringWithFormat:@"Original by fiore\nModified by 34306 and khanhduytran0\nIcon by @super.user\nbfdecrypt by @bishopfox\ndumpdecrypted by @i0n1c\nUpdated for TrollStore by @wh1te4ever\nNathan and mineek for appstoretroller\n\n\nAppStore Spoof: %@\nSpoof iOS Version: %@\nShow Update (in AppStore): %@\nvisionOS Support: %@\n\nThis modified version support decrypt higher requirement iOS application.\nThanks to khanhduytran0, appstoretroller, lldb, modified by 34306.", hookStatus, iosVersion, updatesStatus, visionOSStatus]
         preferredStyle:UIAlertControllerStyleAlert];
-    
+
     UIAlertAction *dismiss = [UIAlertAction actionWithTitle:@"Dismiss" style:UIAlertActionStyleCancel handler:nil];
-    
+
     if (hookEnabled) {
-        UIAlertAction *toggleHook = [UIAlertAction actionWithTitle:@"Disable Hook" 
-            style:UIAlertActionStyleDestructive 
+        UIAlertAction *toggleHook = [UIAlertAction actionWithTitle:@"Disable Hook"
+            style:UIAlertActionStyleDestructive
             handler:^(UIAlertAction *action) {
                 [self toggleAppStoreHook];
             }];
-        
-        UIAlertAction *setIOSVersion = [UIAlertAction actionWithTitle:@"Set iOS Version" 
-            style:UIAlertActionStyleDefault 
+
+        UIAlertAction *setIOSVersion = [UIAlertAction actionWithTitle:@"Set iOS Version"
+            style:UIAlertActionStyleDefault
             handler:^(UIAlertAction *action) {
                 [self setIOSVersion];
             }];
-        
-        UIAlertAction *toggleUpdates = [UIAlertAction actionWithTitle:updatesEnabled ? @"Disable All Updates" : @"Enable All Updates" 
-            style:UIAlertActionStyleDefault 
+
+        UIAlertAction *toggleUpdates = [UIAlertAction actionWithTitle:updatesEnabled ? @"Disable All Updates" : @"Enable All Updates"
+            style:UIAlertActionStyleDefault
             handler:^(UIAlertAction *action) {
                 [self toggleUpdatesEnabled];
             }];
-        
+
+        UIAlertAction *toggleVisionOS = [UIAlertAction actionWithTitle:visionOSEnabled ? @"Disable visionOS Support" : @"Enable visionOS Support"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *action) {
+                [self toggleVisionOSEnabled];
+            }];
+
         [alert addAction:toggleHook];
         [alert addAction:setIOSVersion];
         [alert addAction:toggleUpdates];
+        [alert addAction:toggleVisionOS];
     } else {
-        UIAlertAction *toggleHook = [UIAlertAction actionWithTitle:@"Enable Hook" 
-            style:UIAlertActionStyleDefault 
+        UIAlertAction *toggleHook = [UIAlertAction actionWithTitle:@"Enable Hook"
+            style:UIAlertActionStyleDefault
             handler:^(UIAlertAction *action) {
                 [self toggleAppStoreHook];
             }];
         [alert addAction:toggleHook];
     }
-    
+
     [alert addAction:dismiss];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)syncPrefs {
+    [self.hookPrefs synchronize];
+    // NSUserDefaults writes files as 0600 — installd runs as _installd and can't read them.
+    // Fix permissions to 0644 so all daemons can read the preferences.
+    NSString *prefsPath = ROOT_PATH_NS(@"/var/mobile/Library/Preferences/com.trolldecrypt.hook.plist");
+    [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @(0644)} ofItemAtPath:prefsPath error:nil];
 }
 
 - (void)toggleAppStoreHook {
@@ -114,7 +235,7 @@
     BOOL newState = !currentState;
     
     [self.hookPrefs setBool:newState forKey:@"hookEnabled"];
-    [self.hookPrefs synchronize];
+    [self syncPrefs];
     
     NSString *status = newState ? @"enabled" : @"disabled";
     NSString *message = [NSString stringWithFormat:@"AppStore hook has been %@.\n\nClick Apply to restart daemons and activate changes.", status];
@@ -158,7 +279,7 @@
         NSString *newVersion = alert.textFields.firstObject.text;
         if (newVersion && [newVersion length] > 0) {
             [self.hookPrefs setObject:newVersion forKey:@"iOSVersion"];
-            [self.hookPrefs synchronize];
+            [self syncPrefs];
             
             UIAlertController *successAlert = [UIAlertController alertControllerWithTitle:@"iOS Version Updated" 
                 message:[NSString stringWithFormat:@"iOS version set to %@.\n\nClick Apply to restart daemons and activate changes.", newVersion]
@@ -187,7 +308,7 @@
     BOOL newState = !currentState;
     
     [self.hookPrefs setBool:newState forKey:@"updatesEnabled"];
-    [self.hookPrefs synchronize];
+    [self syncPrefs];
     
     NSString *status = newState ? @"All app updates will now be spoofed" : @"Only buyProduct requests will be spoofed";
     NSString *message = [NSString stringWithFormat:@"%@.\n\nApply to activate changes.", status];
@@ -206,6 +327,30 @@
     
     [alert addAction:apply];
     //[alert addAction:ok];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)toggleVisionOSEnabled {
+    BOOL currentState = [self.hookPrefs boolForKey:@"visionOSEnabled"];
+    BOOL newState = !currentState;
+
+    [self.hookPrefs setBool:newState forKey:@"visionOSEnabled"];
+    [self syncPrefs];
+
+    NSString *status = newState ? @"visionOS device family & capability bypasses enabled" : @"visionOS bypasses disabled (iOS-only mode)";
+    NSString *message = [NSString stringWithFormat:@"%@.\n\nApply to activate changes.", status];
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"visionOS Support Changed"
+        message:message
+        preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *apply = [UIAlertAction actionWithTitle:@"Apply"
+        style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction *action) {
+            [self applyChanges];
+        }];
+
+    [alert addAction:apply];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -282,7 +427,18 @@
 
         cell.textLabel.text = app[@"name"];
         cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ • %@", app[@"version"], app[@"bundleID"]];
-        cell.imageView.image = [UIImage _applicationIconImageForBundleIdentifier:app[@"bundleID"] format:iconFormat() scale:[UIScreen mainScreen].scale];
+        UIImage *icon = nil;
+        BOOL isVisionOS = [app[@"isVisionOS"] boolValue];
+
+        if (!isVisionOS) {
+            icon = [UIImage _applicationIconImageForBundleIdentifier:app[@"bundleID"] format:iconFormat() scale:[UIScreen mainScreen].scale];
+        } else {
+            icon = self.iconCache[app[@"bundleID"]];
+            if (!icon) {
+                icon = [self placeholderIcon];
+            }
+        }
+        cell.imageView.image = icon;
     } else {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
         

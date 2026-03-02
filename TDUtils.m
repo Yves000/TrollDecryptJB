@@ -88,12 +88,36 @@ NSArray *appList(void) {
 
         if (!bundleID || !name || !version || !executable) return;
 
-        NSDictionary *item = @{
+        NSString *bundlePath = proxy.bundleURL.path;
+
+        // Detect visionOS apps via CFBundleSupportedPlatforms
+        BOOL isVisionOS = NO;
+        NSNumber *itemId = nil;
+        if (bundlePath) {
+            NSDictionary *infoPlist = [NSDictionary dictionaryWithContentsOfFile:[bundlePath stringByAppendingPathComponent:@"Info.plist"]];
+            NSArray *platforms = infoPlist[@"CFBundleSupportedPlatforms"];
+            for (NSString *platform in platforms) {
+                if ([platform isEqualToString:@"XROS"]) {
+                    isVisionOS = YES;
+                    break;
+                }
+            }
+            if (isVisionOS) {
+                NSString *metaPath = [[bundlePath stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"iTunesMetadata.plist"];
+                NSDictionary *meta = [NSDictionary dictionaryWithContentsOfFile:metaPath];
+                itemId = meta[@"itemId"];
+            }
+        }
+
+        NSMutableDictionary *item = [@{
             @"bundleID":bundleID,
             @"name":name,
             @"version":version,
-            @"executable":executable
-        };
+            @"executable":executable,
+            @"bundlePath":bundlePath ?: @"",
+            @"isVisionOS":@(isVisionOS)
+        } mutableCopy];
+        if (itemId) item[@"itemId"] = itemId;
 
         [apps addObject:item];
     }];

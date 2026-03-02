@@ -8,6 +8,7 @@
 
 static NSString *iosVersion = nil;
 static BOOL updatesEnabled = NO;
+static BOOL visionOSEnabled = NO;
 
 %group appstoredHooks
 
@@ -37,7 +38,7 @@ static BOOL updatesEnabled = NO;
 
 %end
 
-%group installdHooks
+%group installdOSHooks
 
 %hook MIBundle
 
@@ -69,20 +70,28 @@ static BOOL updatesEnabled = NO;
     return YES;
 }
 
+%end
+
+%end
+
+%group installdVisionOSHooks
+
+%hook MIBundle
+
 // Bypass device family check (allows visionOS UIDeviceFamily=7 on iPhone)
 -(BOOL)isApplicableToCurrentDeviceFamilyWithError:(id*)error {
-    NSLog(@"[TrollDecrypt] installd: bypassing device family check");
+    NSLog(@"[TrollDecrypt] installd: bypassing device family check (visionOS)");
     return YES;
 }
 
 -(BOOL)isCompatibleWithDeviceFamily:(int)family {
-    NSLog(@"[TrollDecrypt] installd: bypassing device family=%d check", family);
+    NSLog(@"[TrollDecrypt] installd: bypassing device family=%d check (visionOS)", family);
     return YES;
 }
 
 // Bypass device capabilities check (visionOS apps may require unavailable capabilities)
 -(BOOL)isApplicableToCurrentDeviceCapabilitiesWithError:(id*)error {
-    NSLog(@"[TrollDecrypt] installd: bypassing device capabilities check");
+    NSLog(@"[TrollDecrypt] installd: bypassing device capabilities check (visionOS)");
     return YES;
 }
 
@@ -113,9 +122,16 @@ static BOOL updatesEnabled = NO;
     // Get updates enabled flag (default: NO)
     updatesEnabled = [[prefs objectForKey:@"updatesEnabled"] boolValue];
 
-    NSLog(@"[TrollDecrypt] Hook enabled - iOS version: %@, updatesEnabled: %d", iosVersion, updatesEnabled);
+    // Get visionOS enabled flag (default: NO)
+    visionOSEnabled = [[prefs objectForKey:@"visionOSEnabled"] boolValue];
 
-        %init(appstoredHooks);
-        %init(installdHooks);
+    NSLog(@"[TrollDecrypt] Hook enabled - iOS version: %@, updatesEnabled: %d, visionOSEnabled: %d", iosVersion, updatesEnabled, visionOSEnabled);
+
+
+    %init(appstoredHooks);
+    %init(installdOSHooks);
+    if (visionOSEnabled) {
+        %init(installdVisionOSHooks);
+    }
 }
 
