@@ -197,6 +197,7 @@ void decryptApp(NSDictionary *app) {
         NSString *appDir = [executable stringByDeletingLastPathComponent];
         NSLog(@"[trolldecrypt] Injecting trustcache for: %@", appDir);
         TDInjectTrustcacheForApp(appDir);
+        usleep(500000); // 500ms — let kernel propagate trustcache changes before launch
 
         NSLog(@"[trolldecrypt] lldb --waitfor for '%@'...", binaryName);
         pid_t lldb_pid = attachLLDBToProcessByName([binaryName UTF8String], -1);//-1 for unknown
