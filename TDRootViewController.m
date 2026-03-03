@@ -15,8 +15,9 @@
     self.title = @"TrollDecrypt";
 	self.navigationController.navigationBar.prefersLargeTitles = YES;
 
-    // Initialize hook preferences
-    self.hookPrefs = [[NSUserDefaults alloc] initWithSuiteName:@"com.trolldecrypt.hook"];
+    // Initialize hook preferences — direct plist I/O, no NSUserDefaults/cfprefsd
+    self.hookPrefsPath = ROOT_PATH_NS(@"/var/mobile/Library/Preferences/com.trolldecrypt.hook.plist");
+    self.hookPrefs = [NSMutableDictionary dictionaryWithContentsOfFile:self.hookPrefsPath] ?: [NSMutableDictionary new];
 
     // Prefetch visionOS icons in parallel
     [self fetchVisionOSIcons];
@@ -162,9 +163,9 @@
 }
 
 - (void)about:(id)sender {
-    BOOL hookEnabled = [self.hookPrefs boolForKey:@"hookEnabled"];
-    BOOL updatesEnabled = [self.hookPrefs boolForKey:@"updatesEnabled"];
-    BOOL visionOSEnabled = [self.hookPrefs boolForKey:@"visionOSEnabled"];
+    BOOL hookEnabled = [[self.hookPrefs objectForKey:@"hookEnabled"] boolValue];
+    BOOL updatesEnabled = [[self.hookPrefs objectForKey:@"updatesEnabled"] boolValue];
+    BOOL visionOSEnabled = [[self.hookPrefs objectForKey:@"visionOSEnabled"] boolValue];
     NSString *iosVersion = [self.hookPrefs objectForKey:@"iOSVersion"];
     if (iosVersion == nil || [iosVersion length] == 0) {
         iosVersion = @"99.0.0";
@@ -223,18 +224,18 @@
 }
 
 - (void)syncPrefs {
-    [self.hookPrefs synchronize];
-    // NSUserDefaults writes files as 0600 — installd runs as _installd and can't read them.
-    // Fix permissions to 0644 so all daemons can read the preferences.
-    NSString *prefsPath = ROOT_PATH_NS(@"/var/mobile/Library/Preferences/com.trolldecrypt.hook.plist");
-    [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @(0644)} ofItemAtPath:prefsPath error:nil];
+    // Write prefs directly to plist file — bypasses cfprefsd entirely.
+    // cfprefsd manages NSUserDefaults files with 0600 permissions and rewrites them
+    // asynchronously, causing race conditions with installd (_installd user).
+    [self.hookPrefs writeToFile:self.hookPrefsPath atomically:YES];
+    [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @(0644)} ofItemAtPath:self.hookPrefsPath error:nil];
 }
 
 - (void)toggleAppStoreHook {
-    BOOL currentState = [self.hookPrefs boolForKey:@"hookEnabled"];
+    BOOL currentState = [[self.hookPrefs objectForKey:@"hookEnabled"] boolValue];
     BOOL newState = !currentState;
     
-    [self.hookPrefs setBool:newState forKey:@"hookEnabled"];
+    [self.hookPrefs setObject:@(newState) forKey:@"hookEnabled"];
     [self syncPrefs];
     
     NSString *status = newState ? @"enabled" : @"disabled";
@@ -304,10 +305,10 @@
 }
 
 - (void)toggleUpdatesEnabled {
-    BOOL currentState = [self.hookPrefs boolForKey:@"updatesEnabled"];
+    BOOL currentState = [[self.hookPrefs objectForKey:@"updatesEnabled"] boolValue];
     BOOL newState = !currentState;
     
-    [self.hookPrefs setBool:newState forKey:@"updatesEnabled"];
+    [self.hookPrefs setObject:@(newState) forKey:@"updatesEnabled"];
     [self syncPrefs];
     
     NSString *status = newState ? @"All app updates will now be spoofed" : @"Only buyProduct requests will be spoofed";
@@ -331,10 +332,10 @@
 }
 
 - (void)toggleVisionOSEnabled {
-    BOOL currentState = [self.hookPrefs boolForKey:@"visionOSEnabled"];
+    BOOL currentState = [[self.hookPrefs objectForKey:@"visionOSEnabled"] boolValue];
     BOOL newState = !currentState;
 
-    [self.hookPrefs setBool:newState forKey:@"visionOSEnabled"];
+    [self.hookPrefs setObject:@(newState) forKey:@"visionOSEnabled"];
     [self syncPrefs];
 
     NSString *status = newState ? @"visionOS device family & capability bypasses enabled" : @"visionOS bypasses disabled (iOS-only mode)";
