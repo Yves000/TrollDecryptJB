@@ -38,7 +38,6 @@ NSArray *appList(void);
 NSUInteger iconFormat(void);
 NSArray *sysctl_ps(void);
 void decryptApp(NSDictionary *app);
-void decryptAppFast(NSDictionary *app);
 void decryptAppWithPID(pid_t pid);
 void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t lldb_pid);
 pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid);
